@@ -21,7 +21,7 @@ A production-grade, asynchronous event ingestion and validation microservice mod
          ▼
    [ SQLite / PostgreSQL DB ] ◄── GET /metrics (Real-time Analytics)
 
-
+```
 ## 🚀 Tech Stack
 Language: Python 3.10+
 Backend Framework: FastAPI, Uvicorn
@@ -31,7 +31,7 @@ Data Processing: Pandas, Requests
 
 
 ## 📂 Project Structure
-
+```text
 telemetry-pipeline/
 ├── data/
 │   └── iot_telemetry_data.csv       # Smart building environmental dataset
@@ -44,3 +44,4 @@ telemetry-pipeline/
 ├── main.py                          # Application entry point
 ├── requirements.txt                 # Project dependencies
 └── README.md
+```
