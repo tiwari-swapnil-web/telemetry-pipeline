@@ -14,9 +14,6 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
-from typing import cast
-from sqlalchemy.engine import CursorResult
-
 from src.database import (
     RejectedLogModel, SessionLocal, TelemetryLogModel, get_insert, init_db,
 )
@@ -25,16 +22,17 @@ from src.schemas import (
     TelemetryPayload, TelemetryResponse,
 )
 
-
 log = logging.getLogger("telemetry")
 
 # Plain `def` endpoints below: the DB driver is blocking, so FastAPI runs them
 # in its threadpool instead of stalling the event loop.
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
     yield
+
 
 app = FastAPI(
     title="Telemetry Ingestion & Validation Microservice",
@@ -43,23 +41,16 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Startup event to ensure database tables are created (OBSOLETE)
-#@app.on_event("startup")
-#def startup_event():
-#    init_db()
-
-
 payload_adapter = TypeAdapter(TelemetryPayload)
 INSERT_CHUNK = 500  # rows per INSERT statement; stays under DB bind-parameter limits
 
-# Dependency to get DB session
+
 def get_db():
     db = SessionLocal()
     try:
         yield db
     finally:
         db.close()
-
 
 
 # ---------- helpers ----------
@@ -76,7 +67,6 @@ def _save_rejects(items: list[tuple]) -> None:
         db.commit()
 
 
-
 # ---------- quarantine single-record validation failures ----------
 @app.exception_handler(RequestValidationError)
 async def validation_error_handler(request, exc: RequestValidationError):
@@ -86,7 +76,6 @@ async def validation_error_handler(request, exc: RequestValidationError):
         except Exception:
             log.exception("Could not store rejected record")
     return JSONResponse(status_code=422, content={"detail": jsonable_encoder(exc.errors())})
-
 
 
 # ---------- ingestion ----------
@@ -112,31 +101,6 @@ def ingest_telemetry(payload: TelemetryPayload, db: Session = Depends(get_db)):
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                             detail="Internal error while storing record.")
 
-'''
-@app.post("/ingest/batch", response_model=BatchResponse)
-def ingest_batch(batch: BatchRequest, db: Session = Depends(get_db)):
-    valid, rejects, sample = [], [], []
-    for i, raw in enumerate(batch.records):
-        try:
-            valid.append(payload_adapter.validate_python(raw).model_dump())
-        except ValidationError as e:
-            reason = _fmt_errors(e.errors())
-            rejects.append({"raw_payload": json.dumps(raw, default=str)[:4000], "reason": reason[:1000]})
-            if len(sample) < 20:
-                sample.append({"index": i, "error": reason})
-    try:
-        if valid:
-            db.execute(insert(TelemetryLogModel), valid)
-        if rejects:
-            db.execute(insert(RejectedLogModel), rejects)
-        db.commit()
-    except Exception:
-        db.rollback()
-        raise HTTPException(status_code=500, detail="Database insertion failed")
-    return {"received": len(batch.records), "accepted": len(valid),
-            "rejected": len(rejects), "sample_errors": sample}
-'''
-
 
 @app.post("/ingest/batch", response_model=BatchResponse)
 def ingest_batch(batch: BatchRequest, db: Session = Depends(get_db)):
@@ -155,10 +119,12 @@ def ingest_batch(batch: BatchRequest, db: Session = Depends(get_db)):
     inserted = 0
     try:
         ins = get_insert()
+        # executemany-style insert: SQLAlchemy batches the rows efficiently (insertmanyvalues).
+        # RETURNING yields one row per row actually inserted; skipped duplicates return nothing,
+        # so the count is exact on both SQLite and PostgreSQL.
+        stmt = ins(TelemetryLogModel).on_conflict_do_nothing().returning(TelemetryLogModel.id)
         for i in range(0, len(valid), INSERT_CHUNK):
-            stmt = ins(TelemetryLogModel).values(valid[i:i + INSERT_CHUNK]).on_conflict_do_nothing()
-            result = cast(CursorResult, db.execute(stmt))
-            inserted += result.rowcount or 0             # rows actually inserted
+            inserted += len(db.execute(stmt, valid[i:i + INSERT_CHUNK]).all())
         if rejects:
             db.execute(insert(RejectedLogModel), rejects)
         db.commit()                                      # one atomic transaction
@@ -171,8 +137,6 @@ def ingest_batch(batch: BatchRequest, db: Session = Depends(get_db)):
     return {"received": len(batch.records), "accepted": inserted,
             "duplicates": len(valid) - inserted, "rejected": len(rejects),
             "sample_errors": sample}
-
-
 
 
 # ---------- monitoring ----------
