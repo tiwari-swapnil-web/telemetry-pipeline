@@ -1,3 +1,5 @@
+[![tests](https://github.com/tiwari-swapnil-web/telemetry-pipeline/actions/workflows/tests.yml/badge.svg)](https://github.com/tiwari-swapnil-web/telemetry-pipeline/actions/workflows/tests.yml)
+
 # Telemetry Ingestion & Validation Pipeline
 
 A validation-first ingestion microservice for IoT sensor telemetry, inspired by high-throughput
@@ -40,29 +42,34 @@ flowchart LR
 
 ## Tech stack
 
-Python 3.10+, FastAPI, Uvicorn, Pydantic v2, SQLAlchemy 2.0, SQLite / PostgreSQL (Supabase), pandas, requests, pytest.
+Python 3.10+ (developed on 3.14), FastAPI, Uvicorn, Pydantic 2.x, SQLAlchemy 2.x, SQLite / PostgreSQL (Supabase), pandas, requests, pytest.
 
 ## Quick start
 
-```bash
-# 1. Install
-python -m venv .venv
-.venv\Scripts\activate            # macOS/Linux: source .venv/bin/activate
+**Windows (PowerShell)**
+```powershell
+py -m venv .venv
+.venv\Scripts\Activate.ps1      # if blocked: Set-ExecutionPolicy -Scope Process Bypass
 pip install -r requirements.txt
-
-# 2. Configure (optional: defaults to local SQLite)
-copy .env.example .env            # macOS/Linux: cp .env.example .env
-
-# 3. Get the data: download the "Environmental Sensor Telemetry Data" CSV from Kaggle
-#    (https://www.kaggle.com/datasets/garystafford/environmental-sensor-data-132k) and save it as data/iot_telemetry_data.csv  (git-ignored: 60 MB)
-
-# 4. Start the API
-uvicorn src.main:app --reload
-
-# 5. In a second terminal, stream data into it
-python -m src.generator_batch                 # 20,000 rows
-python -m src.generator_batch --rows 0        # the full dataset
+copy .env.example .env          # optional: defaults to local SQLite
 ```
+
+**macOS / Linux**
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env            # optional: defaults to local SQLite
+```
+
+**Then, on any OS**
+
+1. Download the "Environmental Sensor Telemetry Data" CSV from [Kaggle](https://www.kaggle.com/datasets/garystafford/environmental-sensor-data-132k) and save it as `data/iot_telemetry_data.csv` (git-ignored: 60 MB).
+2. Start the API: `uvicorn src.main:app --reload`
+3. In a second terminal (activate the venv there too), stream data into it:
+   ```
+   python -m src.generator_batch              # 20,000 rows (use `py` on Windows)
+   python -m src.generator_batch --rows 0     # the full dataset
+   ```
 
 Interactive API docs: <http://127.0.0.1:8000/docs>
 
@@ -134,7 +141,7 @@ Full load of all 405,184 rows (about 5% of records deliberately corrupted by the
 | Duplicates skipped | 12 |
 | **Total** | **405,184** |
 
-Re-running the same 20,000-row load against Postgres reported 908 accepted, 18,093 duplicates and 999 rejected, with no double-counted rows.
+Re-running the same 20,000-row load against Supabase Postgres (42.7 s) reported 908 accepted, 18,093 duplicates and 999 rejected, with no double-counted rows.
 
 Quarantined records are stored with their raw payload and the validation message, grouped here by reason:
 
@@ -171,7 +178,7 @@ Each row is a different version of the code, so only compare numbers within a ve
 
 Takeaways:
 - Batching improved remote throughput by roughly 400x over single-row inserts. The remote-vs-local gap is network latency, not validation cost.
-- Adding idempotency (v4) dropped throughput about 4-5x. Running the old and new code side by side in the same folder reproduced the slowdown, so it came from how the insert statement was built, not from the environment. Switching to batched inserts with `RETURNING` (v5) restored the speed with the unique key still in place, about 3.8x faster on the 20k load and 2.7x on the full load.
+- Adding idempotency (v4) dropped throughput roughly 4-6x. Running the old and new code side by side in the same folder reproduced the slowdown on the 20k load, so it came from how the insert statement was built, not from the environment. Switching to batched inserts with RETURNING (v5) restored the speed with the unique key still in place (about 3.8x faster on the 20k load). The full-load figures (v4: 3,625 rows/s, v5: 9,811 rows/s) were measured in different folders, so treat that comparison as indicative.
 - Throughput on the full dataset (9.8k rows/s) is lower than on the 20k load (14.2k rows/s), which fits a larger table and indexes; the exact cause was not isolated.
 - Measured on a single developer laptop; treat the numbers as relative, and expect run-to-run variation.
 - On remote Postgres, v5 runs at about the same speed as v2 (~450 rows/s), so the insert-method fix does not help there: network latency dominates.
@@ -180,7 +187,7 @@ Takeaways:
 
 - **Plain `def` endpoints:** SQLite and psycopg2 are blocking drivers, so FastAPI runs the handlers in its threadpool instead of blocking the event loop.
 - **Validate records individually:** the batch body is `list[dict]` validated record by record, so the response can report exactly which records failed and why.
-- **Validation errors never reach the database layer:** bad data is stopped at the schema, and the DB constraint (unique key) is a second line of defence.
+- **Invalid records never reach the telemetry table:** bad data is stopped at the schema, and the unique key is a second line of defence.
 - **Errors do not leak internals:** database failures return a generic 500 and are logged server-side.
 - **Same code, two databases:** the dialect-specific `ON CONFLICT` insert is chosen at runtime.
 
@@ -197,18 +204,22 @@ The suite uses a temporary SQLite database (never your real data) and covers: va
 ```
 telemetry-pipeline/
 ├── src/
+│   ├── __init__.py
 │   ├── main.py              # FastAPI app and endpoints
 │   ├── schemas.py           # Pydantic models and validation rules
 │   ├── database.py          # SQLAlchemy engine, models, dialect helper
 │   └── generator_batch.py   # CSV -> anomaly injection -> batched POSTs
 ├── tests/
+│   ├── __init__.py
 │   ├── conftest.py          # throwaway test database + client fixture
 │   └── test_api.py
 ├── data/                    # put iot_telemetry_data.csv here (git-ignored)
 ├── .env.example
 ├── pytest.ini
 ├── requirements.txt
-└── README.md
+├── README.md
+├── .gitignore
+└── LICENSE
 ```
 
 ## Limitations and next steps
@@ -216,7 +227,10 @@ telemetry-pipeline/
 - No authentication or rate limiting on the endpoints.
 - Metrics are computed with queries on each request; a production system would export counters (e.g. Prometheus).
 - Schema changes need a migration tool (Alembic); tables are created with `create_all`.
-- Containerise with Docker and add CI to run the tests on every push.
+- Containerise with Docker.
+
+## Credit
+Dataset: [Environmental Sensor Telemetry Data by Gary Stafford (Kaggle)](https://www.kaggle.com/datasets/garystafford/environmental-sensor-data-132k) (CC0: Public Domain)
 
 ## License
 
