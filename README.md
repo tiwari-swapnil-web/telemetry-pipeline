@@ -14,7 +14,7 @@ Built and tested against a real dataset: **405,184 environmental sensor readings
 - **Per-record handling in batches:** one bad record never rejects the rest of the batch.
 - **Quarantine table:** every rejected record is stored with its raw payload and the validation message, so nothing disappears silently.
 - **Idempotent loads:** a unique `(device_id, timestamp)` key means re-sending data never creates duplicates.
-- **Bulk inserts:** a single transaction per request, in chunks, using `INSERT ... ON CONFLICT DO NOTHING`.
+- **Bulk inserts:** one transaction per request; batched `INSERT ... ON CONFLICT DO NOTHING ... RETURNING`, so the inserted-row count is exact.
 - **Observability:** `/metrics` reports totals, error rate, rolling throughput and sensor averages; `/health` for liveness.
 - **SQLite or PostgreSQL:** chosen by one environment variable (`DATABASE_URL`), tested on SQLite and Supabase Postgres.
 - **Automated tests:** pytest suite running against a throwaway database.
@@ -55,7 +55,6 @@ copy .env.example .env            # macOS/Linux: cp .env.example .env
 
 # 3. Get the data: download the "Environmental Sensor Telemetry Data" CSV from Kaggle
 #    and save it as data/iot_telemetry_data.csv  (the file is git-ignored: 60 MB)
-https://www.kaggle.com/datasets/garystafford/environmental-sensor-data-132k
 
 # 4. Start the API
 uvicorn src.main:app --reload
@@ -98,19 +97,19 @@ curl -X POST http://127.0.0.1:8000/ingest/batch -H "Content-Type: application/js
 # -> {"received":2,"accepted":1,"duplicates":0,"rejected":1,"sample_errors":[{"index":1,"error":"humidity: Input should be less than or equal to 100"}]}
 ```
 
-### Sample `/metrics` response (after loading the full dataset)
+### Sample `/metrics` response (right after loading the full dataset)
 
 ```json
 {
-  "totals": { "received": 405172, "stored": 384975, "rejected": 20197 },
-  "error_rate_pct": 4.98,
-  "throughput": { "window_seconds": 60, "records_in_window": 0, "records_per_sec": 0.0 },
+  "totals": { "received": 405172, "stored": 385104, "rejected": 20068 },
+  "error_rate_pct": 4.95,
+  "throughput": { "window_seconds": 60, "records_in_window": 405172, "records_per_sec": 6752.87 },
   "unique_devices": 3,
-  "averages": { "temperature_celsius": 22.46, "humidity_pct": 60.51, "carbon_monoxide": 0.0046, "smoke": 0.0193 }
+  "averages": { "temperature_celsius": 22.45, "humidity_pct": 60.51, "carbon_monoxide": 0.0046, "smoke": 0.0193 }
 }
 ```
 
-`received` = stored + rejected. Duplicates skipped by the unique key are reported in the `/ingest/batch` response but are not counted as received. `records_per_sec` is an average over the last 60 seconds, so it reads 0 once traffic stops.
+`received` = stored + rejected. Duplicates skipped by the unique key are reported in the `/ingest/batch` response but are not counted as received. `records_per_sec` is the number of records in the last 60 seconds divided by 60, so it is a window average: it understates the peak rate of a load shorter than the window (this load took 41 s) and reads 0 once traffic stops.
 
 ## Validation rules
 
@@ -126,22 +125,16 @@ curl -X POST http://127.0.0.1:8000/ingest/batch -H "Content-Type: application/js
 
 ## Results on the real dataset
 
-Full load of all 405,184 rows (5% of records deliberately corrupted by the generator):
+Full load of all 405,184 rows (about 5% of records deliberately corrupted by the generator):
 
 | Outcome | Rows |
 |---|---|
-| Stored | 384,975 |
-| Rejected and quarantined | 20,197 (4.98%) |
+| Stored | 385,104 |
+| Rejected and quarantined | 20,068 (4.95%) |
 | Duplicates skipped | 12 |
 | **Total** | **405,184** |
 
-Quarantined records, grouped by reason:
-
-| Reason | Count |
-|---|---|
-| `device_id`: field required | 6,803 |
-| `temp`: not a valid number | 6,799 |
-| `humidity`: above 100 | 6,595 |
+Quarantined records are stored with their raw payload and the validation message. They fall into the three injected anomaly types: missing `device_id`, a non-numeric `temp`, and `humidity` above 100.
 
 **Data-quality finding:** the source CSV itself contains 13 exact duplicate `(device, timestamp)` rows (the same transmission recorded twice). The unique key makes sure each reading is stored once.
 
@@ -152,7 +145,8 @@ Each row is a different version of the code, so only compare numbers within a ve
 - **v1:** single-record `POST /ingest`, one commit per row.
 - **v2:** batch endpoint, valid rows bulk-inserted.
 - **v3:** v2 + quarantine table + `/metrics` error rate.
-- **v4 (current):** v3 + unique `(device_id, timestamp)` key and `ON CONFLICT DO NOTHING`.
+- **v4:** v3 + unique `(device_id, timestamp)` key and `ON CONFLICT DO NOTHING`, inserting each chunk as one multi-row `VALUES` statement.
+- **v5 (current):** v4, but inserting each chunk with an executemany-style statement plus `RETURNING` (SQLAlchemy batches the rows internally).
 
 | Version | Database | Rows | Time | Throughput |
 |---|---|---|---|---|
@@ -160,14 +154,16 @@ Each row is a different version of the code, so only compare numbers within a ve
 | v2 | Supabase (remote) | 20,000 | 47.0 s | 425 rows/s |
 | v2 | SQLite (local) | 20,000 | 1.4 s | 14,089 rows/s |
 | v3 | SQLite (local) | 20,000 | 1.2 s | 16,445 rows/s |
-| v4 | SQLite (local) | 20,000 | 5.9-7.4 s | 2.7-3.4k rows/s |
-| **v4 (current)** | **SQLite (local)** | **405,184** | **111.8 s** | **3,625 rows/s** |
+| v4 | SQLite (local) | 20,000 | 5.3-7.4 s | 2.7-3.8k rows/s |
+| v4 | SQLite (local) | 405,184 | 111.8 s | 3,625 rows/s |
+| v5 (current) | SQLite (local) | 20,000 | 1.4 s | 14,204 rows/s |
+| **v5 (current)** | **SQLite (local)** | **405,184** | **41.3 s** | **9,811 rows/s** |
 
 Takeaways:
-- Batching improved remote throughput by roughly 400x over single-row inserts; the remote-vs-local gap is network latency, not validation cost.
-- Idempotency (v4) costs throughput compared with v3. That is a deliberate trade: a re-run, retry or replay can no longer double-count data.
-- Throughput stayed flat from the 20k to the 405k load.
-- Measured on a single developer laptop with the project in a OneDrive folder; treat the numbers as relative, not absolute.
+- Batching improved remote throughput by roughly 400x over single-row inserts. The remote-vs-local gap is network latency, not validation cost.
+- Adding idempotency (v4) dropped throughput about 4-5x. Running the old and new code side by side in the same folder reproduced the slowdown, so it came from how the insert statement was built, not from the environment. Switching to batched inserts with `RETURNING` (v5) restored the speed with the unique key still in place, about 3.8x faster on the 20k load and 2.7x on the full load.
+- Throughput on the full dataset (9.8k rows/s) is lower than on the 20k load (14.2k rows/s), which fits a larger table and indexes; the exact cause was not isolated.
+- Measured on a single developer laptop; treat the numbers as relative, and expect run-to-run variation.
 
 ## Design decisions
 
