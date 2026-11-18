@@ -16,7 +16,7 @@ Built and tested against a real dataset: **405,184 environmental sensor readings
 - **Idempotent loads:** a unique `(device_id, timestamp)` key means re-sending data never creates duplicates.
 - **Bulk inserts:** one transaction per request; batched `INSERT ... ON CONFLICT DO NOTHING ... RETURNING`, so the inserted-row count is exact.
 - **Observability:** `/metrics` reports totals, error rate, rolling throughput and sensor averages; `/health` for liveness.
-- **SQLite or PostgreSQL:** chosen by one environment variable (`DATABASE_URL`), tested on SQLite and Supabase Postgres.
+- **SQLite or PostgreSQL:** chosen by one environment variable (`DATABASE_URL`). Both were run end to end with the current version, including the idempotent re-load.
 - **Automated tests:** pytest suite running against a throwaway database.
 
 ## Architecture
@@ -54,7 +54,7 @@ pip install -r requirements.txt
 copy .env.example .env            # macOS/Linux: cp .env.example .env
 
 # 3. Get the data: download the "Environmental Sensor Telemetry Data" CSV from Kaggle
-#    and save it as data/iot_telemetry_data.csv  (the file is git-ignored: 60 MB)
+#    (https://www.kaggle.com/datasets/garystafford/environmental-sensor-data-132k) and save it as data/iot_telemetry_data.csv  (git-ignored: 60 MB)
 
 # 4. Start the API
 uvicorn src.main:app --reload
@@ -134,6 +134,8 @@ Full load of all 405,184 rows (about 5% of records deliberately corrupted by the
 | Duplicates skipped | 12 |
 | **Total** | **405,184** |
 
+Re-running the same 20,000-row load against Postgres reported 908 accepted, 18,093 duplicates and 999 rejected, with no double-counted rows.
+
 Quarantined records are stored with their raw payload and the validation message, grouped here by reason:
 
 | Reason | Count |
@@ -165,12 +167,14 @@ Each row is a different version of the code, so only compare numbers within a ve
 | v4 | SQLite (local) | 405,184 | 111.8 s | 3,625 rows/s |
 | v5 (current) | SQLite (local) | 20,000 | 1.4 s | 14,204 rows/s |
 | **v5 (current)** | **SQLite (local)** | **405,184** | **41.3 s** | **9,811 rows/s** |
+| **v5 (current)** | **Supabase (remote)** | **20,000** | **42.7-44.5 s** | **450-468 rows/s** |
 
 Takeaways:
 - Batching improved remote throughput by roughly 400x over single-row inserts. The remote-vs-local gap is network latency, not validation cost.
 - Adding idempotency (v4) dropped throughput about 4-5x. Running the old and new code side by side in the same folder reproduced the slowdown, so it came from how the insert statement was built, not from the environment. Switching to batched inserts with `RETURNING` (v5) restored the speed with the unique key still in place, about 3.8x faster on the 20k load and 2.7x on the full load.
 - Throughput on the full dataset (9.8k rows/s) is lower than on the 20k load (14.2k rows/s), which fits a larger table and indexes; the exact cause was not isolated.
 - Measured on a single developer laptop; treat the numbers as relative, and expect run-to-run variation.
+- On remote Postgres, v5 runs at about the same speed as v2 (~450 rows/s), so the insert-method fix does not help there: network latency dominates.
 
 ## Design decisions
 
