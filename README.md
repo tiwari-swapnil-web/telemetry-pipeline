@@ -134,7 +134,14 @@ Full load of all 405,184 rows (about 5% of records deliberately corrupted by the
 | Duplicates skipped | 12 |
 | **Total** | **405,184** |
 
-Quarantined records are stored with their raw payload and the validation message. They fall into the three injected anomaly types: missing `device_id`, a non-numeric `temp`, and `humidity` above 100.
+Quarantined records are stored with their raw payload and the validation message, grouped here by reason:
+
+| Reason | Count |
+|---|---|
+| `humidity`: above 100 | 6,746 |
+| `temp`: not a valid number | 6,738 |
+| `device_id`: field required | 6,584 |
+| **Total** | **20,068** |
 
 **Data-quality finding:** the source CSV itself contains 13 exact duplicate `(device, timestamp)` rows (the same transmission recorded twice). The unique key makes sure each reading is stored once.
 
