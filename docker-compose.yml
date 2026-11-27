@@ -1,0 +1,29 @@
+# Local demo: the API plus its own PostgreSQL.  Run:  docker compose up --build
+# The credentials below are for local development only; never reuse them anywhere real.
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: telemetry
+      POSTGRES_PASSWORD: telemetry
+      POSTGRES_DB: telemetry
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U telemetry -d telemetry"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: .
+    environment:
+      DATABASE_URL: postgresql://telemetry:telemetry@db:5432/telemetry
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
