@@ -220,6 +220,9 @@ CI runs the suite on SQLite (Python 3.10, 3.12, 3.14) and on a PostgreSQL 16 ser
 
 ```
 telemetry-pipeline/
+├── .github/
+│   └── workflows/
+│       └── tests.yml        # CI: SQLite (3.10/3.12/3.14) + PostgreSQL service
 ├── src/
 │   ├── __init__.py
 │   ├── main.py              # FastAPI app and endpoints
@@ -229,13 +232,17 @@ telemetry-pipeline/
 ├── tests/
 │   ├── __init__.py
 │   ├── conftest.py          # throwaway test database + client fixture
-│   └── test_api.py
+│   ├── test_api.py
+│   └── test_database_url.py # PostgreSQL driver selection
 ├── data/                    # put iot_telemetry_data.csv here (git-ignored)
+├── Dockerfile
+├── docker-compose.yml       # API + PostgreSQL for local use
+├── .dockerignore
 ├── .env.example
+├── .gitignore
 ├── pytest.ini
 ├── requirements.txt
 ├── README.md
-├── .gitignore
 └── LICENSE
 ```
 
