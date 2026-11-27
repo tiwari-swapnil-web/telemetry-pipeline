@@ -199,7 +199,7 @@ pytest -v
 
 The suite uses a temporary SQLite database (never your real data) and covers: valid and invalid single records, duplicates (409), quarantine behaviour, MAC normalisation, mixed batches, idempotent re-loads, duplicates inside one batch, envelope validation, empty and populated `/metrics`, and `/logs/recent` ordering and limits.
 
-CI runs the suite on Python 3.10, 3.12 and 3.14 on every push.
+CI runs the suite on SQLite (Python 3.10, 3.12, 3.14) and on a PostgreSQL 16 service container.
 
 ## Project structure
 
