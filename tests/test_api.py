@@ -110,3 +110,12 @@ def test_recent_logs_newest_first_and_limit_validation(client):
     assert data["count"] == 2
     assert [d["timestamp"] for d in data["data"]] == [200.0, 150.0]
     assert client.get("/logs/recent?limit=0").status_code == 422
+
+
+# ---------- environment guard ----------
+def test_database_backend_matches_environment():
+    """Proves CI really ran against the database it claims to (no silent SQLite fallback)."""
+    import os
+    from src.database import engine
+    expected = "postgresql" if os.environ.get("TEST_DATABASE_URL") else "sqlite"
+    assert engine.dialect.name == expected
