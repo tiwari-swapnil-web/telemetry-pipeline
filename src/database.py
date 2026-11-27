@@ -7,17 +7,27 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import declarative_base, sessionmaker
 
-# Load environment variables from .env file
 load_dotenv()
 
-# Read DATABASE_URL from environment, fallback to local SQLite
+# Read DATABASE_URL from .env, fall back to local SQLite
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./telemetry.db")
 
-# Fix Supabase / PostgreSQL URI prefix quirk if present
-if DATABASE_URL.startswith("postgres://"):
-    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+def normalise_database_url(url: str) -> str:
+    """Make the PostgreSQL driver explicit.
 
-# Configure engine arguments based on database type
+    Providers (Supabase/Heroku) hand out "postgres://" or "postgresql://". SQLAlchemy 2.1
+    changed the default driver for "postgresql://" from psycopg2 to psycopg 3, but this
+    project installs psycopg2-binary, so name it explicitly. URLs that already name a
+    driver (e.g. "postgresql+psycopg://") and non-Postgres URLs are left untouched.
+    """
+    for prefix in ("postgres://", "postgresql://"):
+        if url.startswith(prefix):
+            return "postgresql+psycopg2://" + url[len(prefix):]
+    return url
+
+
+DATABASE_URL = normalise_database_url(DATABASE_URL)
+
 if DATABASE_URL.startswith("sqlite"):
     engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 else:
@@ -26,7 +36,6 @@ else:
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
-
 
 
 class TelemetryLogModel(Base):
@@ -45,7 +54,7 @@ class TelemetryLogModel(Base):
     smoke = Column(Float, nullable=False)
     temp = Column(Float, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
-    
+
 
 class RejectedLogModel(Base):
     """Quarantine table: raw payloads that failed validation, plus the reason."""
@@ -56,9 +65,11 @@ class RejectedLogModel(Base):
     reason = Column(Text, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
 
+
 def init_db():
-    """Initialize database tables in Supabase / PostgreSQL or SQLite."""
+    """Create tables if they don't exist (SQLite or PostgreSQL/Supabase)."""
     Base.metadata.create_all(bind=engine)
+
 
 def get_insert():
     """Dialect-specific INSERT that supports ON CONFLICT DO NOTHING."""
