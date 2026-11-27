@@ -75,6 +75,19 @@ Interactive API docs: <http://127.0.0.1:8000/docs>
 
 Generator options: `--rows N` (0 = all), `--batch-size N`, `--anomaly-rate 0.05`, `--seed N` (repeatable runs).
 
+### Run with Docker
+
+```bash
+docker compose up --build        # API + PostgreSQL on http://127.0.0.1:8000
+```
+
+The compose file starts its own PostgreSQL 16 (demo credentials, local use only) and the API on port 8000. Stream data into it with `python -m src.generator_batch` (use `py` on Windows). To check the rows are in the database:
+
+```bash
+docker compose exec db psql -U telemetry -d telemetry -c "select count(*) from telemetry_logs;"
+```
+
+
 ## API reference
 
 | Method | Path | Purpose |
@@ -175,6 +188,7 @@ Each row is a different version of the code, so only compare numbers within a ve
 | v5 (current) | SQLite (local) | 20,000 | 1.4 s | 14,204 rows/s |
 | **v5 (current)** | **SQLite (local)** | **405,184** | **41.3 s** | **9,811 rows/s** |
 | **v5 (current)** | **Supabase (remote)** | **20,000** | **42.7-44.5 s** | **450-468 rows/s** |
+| **v5 (current)** | **PostgreSQL 16 in Docker (local)** | **20,000** | **2.9 s** | **6,780 rows/s** |
 
 Takeaways:
 - Batching improved remote throughput by roughly 400x over single-row inserts. The remote-vs-local gap is network latency, not validation cost.
@@ -182,6 +196,7 @@ Takeaways:
 - Throughput on the full dataset (9.8k rows/s) is lower than on the 20k load (14.2k rows/s), which fits a larger table and indexes; the exact cause was not isolated.
 - Measured on a single developer laptop; treat the numbers as relative, and expect run-to-run variation.
 - On remote Postgres, v5 runs at about the same speed as v2 (~450 rows/s), so the insert-method fix does not help there: network latency dominates.
+- Against a local PostgreSQL in Docker, v5 ran at about 6.8k rows/s, versus about 450 rows/s against remote Supabase. That is consistent with network latency dominating the remote result, but the two were measured on different machines, so treat the comparison as indicative.
 
 ## Design decisions
 
@@ -229,7 +244,6 @@ telemetry-pipeline/
 - No authentication or rate limiting on the endpoints.
 - Metrics are computed with queries on each request; a production system would export counters (e.g. Prometheus).
 - Schema changes need a migration tool (Alembic); tables are created with `create_all`.
-- Containerise with Docker.
 
 ## Credit
 Dataset: [Environmental Sensor Telemetry Data by Gary Stafford (Kaggle)](https://www.kaggle.com/datasets/garystafford/environmental-sensor-data-132k) (CC0: Public Domain)
